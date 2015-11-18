@@ -49,6 +49,7 @@ import hashlib
 import uuid
 import cStringIO
 import math
+import itertools
 
 csv.field_size_limit(sys.maxsize)
 
@@ -388,15 +389,54 @@ class LineSplitter(object):
             line = line[:-1]
         return self.split_regexp.split(line, max_split=self.expected_column_count)
 
+class SpecifiedTypes(object):
+    """
+    List of types that can be used for input_types command line option.
+
+    >>> specified = "auto,int,str".split(",")
+    >>> SpecifiedTypes.get_type_list(specified,[str,str,int,int])
+    [<type 'str'>, <type 'int'>, <type 'str'>, <type 'int'>]
+    """
+    # Need's to match Sqlite3DB object's possible types
+    TYPE_MAP = {
+        "str": str,
+        "int": int,
+        "long": long,
+        "float": float,
+        # valid type but special cased
+        "auto": str
+    }
+
+    @classmethod
+    def get_type(cls, type_string, auto_type=str):
+        """
+        Get a type (or constructor) from a type string
+        """
+        return auto_type if type_string=="auto" else cls.TYPE_MAP[type_string]
+
+    @classmethod
+    def get_type_list(cls, specify_list, auto_list):
+        return [ cls.get_type(c, inferred)
+                 for (c, inferred)
+                 in zip( itertools.cycle(specify_list), auto_list) ]
+
+    @classmethod
+    def valid_type(cls, type_string):
+        return type_string in cls.TYPE_MAP
+
+    @classmethod
+    def valid_types(cls):
+        return cls.TYPE_MAP.keys()
 
 class TableColumnInferer(object):
 
-    def __init__(self, mode, expected_column_count, input_delimiter, skip_header=False):
+    def __init__(self, mode, expected_column_count, input_delimiter, input_types=None, skip_header=False):
         self.inferred = False
         self.mode = mode
         self.rows = []
         self.skip_header = skip_header
         self.header_row = None
+        self.specified_input_types = input_types
         self.expected_column_count = expected_column_count
         self.input_delimiter = input_delimiter
 
@@ -475,8 +515,10 @@ class TableColumnInferer(object):
             raise Exception("Detected a column count of zero... Failing")
 
         self.infer_column_types()
-
         self.infer_column_names()
+        # override inferred types
+        if self.specified_input_types:
+            self.column_types = SpecifiedTypes.get_type_list(self.specified_input_types, self.column_types)
 
     def validate_column_names(self, value_list):
         column_name_errors = []
@@ -562,6 +604,7 @@ class TableColumnInferer(object):
             counts[column_count] = counts.get(column_count, 0) + 1
         return ", ".join(["%s rows with %s columns" % (v, k) for k, v in counts.iteritems()])
 
+
     def _do_strict_analysis(self):
         column_count_list = [len(col_vals) for col_vals in self.rows]
 
@@ -598,6 +641,7 @@ class TableColumnInferer(object):
             number_of_column_types = len(set(self.column_types))
             if number_of_column_types == 1 and list(set(self.column_types))[0] == str:
                 print >>sys.stderr, 'Warning - There seems to be header line in the file, but -H has not been specified. All fields will be detected as text fields, and the header line will appear as part of the data'
+
 
     def get_column_dict(self):
         return dict(zip(self.column_names, self.column_types))
@@ -671,7 +715,7 @@ class MaterializedFileState(object):
 
 class TableCreator(object):
 
-    def __init__(self, db, filenames_str, line_splitter, skip_header=False, gzipped=False, encoding='UTF-8', mode='fluffy', expected_column_count=None, input_delimiter=None,stdin_file=None,stdin_filename='-'):
+    def __init__(self, db, filenames_str, line_splitter, skip_header=False, gzipped=False, encoding='UTF-8', mode='fluffy', expected_column_count=None, input_types=None, input_delimiter=None,stdin_file=None,stdin_filename='-'):
         self.db = db
         self.filenames_str = filenames_str
         self.skip_header = skip_header
@@ -681,12 +725,13 @@ class TableCreator(object):
         self.encoding = encoding
         self.mode = mode
         self.expected_column_count = expected_column_count
+        self.input_types = input_types
         self.input_delimiter = input_delimiter
         self.stdin_file = stdin_file
         self.stdin_filename = stdin_filename
 
         self.column_inferer = TableColumnInferer(
-            mode, expected_column_count, input_delimiter, skip_header)
+            mode, expected_column_count, input_delimiter, input_types, skip_header)
 
         # Filled only after table population since we're inferring the table
         # creation data
@@ -1049,7 +1094,7 @@ class QOutput(object):
 class QInputParams(object):
     def __init__(self,skip_header=False,
             delimiter=' ',input_encoding='UTF-8',gzipped_input=False,parsing_mode='relaxed',
-            expected_column_count=None,keep_leading_whitespace_in_values=False,
+            expected_column_count=None,input_types=None,keep_leading_whitespace_in_values=False,
             disable_double_double_quoting=False,disable_escaped_double_quoting=False,
             input_quoting_mode='minimal',stdin_file=None,stdin_filename='-'):
         self.skip_header = skip_header
@@ -1058,6 +1103,7 @@ class QInputParams(object):
         self.gzipped_input = gzipped_input
         self.parsing_mode = parsing_mode
         self.expected_column_count = expected_column_count
+        self.input_types = input_types
         self.keep_leading_whitespace_in_values = keep_leading_whitespace_in_values
         self.disable_double_double_quoting = disable_double_double_quoting
         self.disable_escaped_double_quoting = disable_escaped_double_quoting
@@ -1131,7 +1177,7 @@ class QTextAsData(object):
         # Create the matching database table and populate it
         table_creator = TableCreator(
             self.db, filename, line_splitter, input_params.skip_header, input_params.gzipped_input, input_params.input_encoding,
-            mode=input_params.parsing_mode, expected_column_count=input_params.expected_column_count, 
+            mode=input_params.parsing_mode, expected_column_count=input_params.expected_column_count, input_types=input_params.input_types,
             input_delimiter=input_params.delimiter,stdin_file = stdin_file,stdin_filename = stdin_filename)
 
         table_creator.populate(dialect_id,stop_after_analysis)
@@ -1505,6 +1551,8 @@ def run_standalone():
                       help="Data parsing mode. fluffy, relaxed and strict. In strict mode, the -c column-count parameter must be supplied as well")
     input_data_option_group.add_option("-c", "--column-count", dest="column_count", default=None,
                       help="Specific column count when using relaxed or strict mode")
+    input_data_option_group.add_option("-p", "--input-types", dest="input_types", default=None,
+                      help="Specify input column types (multiple values allowed separeted by comma)")
     input_data_option_group.add_option("-k", "--keep-leading-whitespace", dest="keep_leading_whitespace_in_values", default=False, action="store_true",
                       help="Keep leading whitespace in values. Default behavior strips leading whitespace off values, in order to provide out-of-the-box usability for simple use cases. If you need to preserve whitespace, use this flag.")
     input_data_option_group.add_option("--disable-double-double-quoting", dest="disable_double_double_quoting", default=True, action="store_false",
@@ -1580,6 +1628,13 @@ def run_standalone():
     if options.mode not in ['fluffy', 'relaxed', 'strict']:
         print >>sys.stderr, "Parsing mode can be one of fluffy, relaxed or strict"
         sys.exit(13)
+    if options.input_types is None:
+        input_types = None
+    else:
+        input_types = [s.strip() for s in options.input_types.split(",")]
+        if any([not SpecifiedTypes.valid_type(s) for s in input_types]):
+            print >>sys.stderr,"input_type must be on of",SpecifiedTypes.valid_types()
+            sys.exit(14)
 
     output_encoding = get_stdout_encoding(options.output_encoding)
     try:
@@ -1641,6 +1696,7 @@ def run_standalone():
         input_encoding=options.encoding,
         gzipped_input=options.gzipped,
         parsing_mode=options.mode,
+        input_types=input_types,
         expected_column_count=expected_column_count,
         keep_leading_whitespace_in_values=options.keep_leading_whitespace_in_values,
         disable_double_double_quoting=options.disable_double_double_quoting,

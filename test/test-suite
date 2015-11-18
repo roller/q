@@ -19,8 +19,10 @@ import time
 from tempfile import NamedTemporaryFile
 import locale
 import pprint
+import doctest
 
 sys.path.append(os.path.join(os.path.abspath(os.path.dirname(sys.argv[0])),'..','bin'))
+import qtextasdata
 from qtextasdata import QTextAsData,QOutput,QOutputPrinter,QInputParams
 
 # q uses this encoding as the default output encoding. Some of the tests use it in order to 
@@ -2026,7 +2028,8 @@ def suite():
     sql = tl.loadTestsFromTestCase(SqlTests)
     formatting = tl.loadTestsFromTestCase(FormattingTests)
     basic_module_stuff = tl.loadTestsFromTestCase(BasicModuleTests)
-    return unittest.TestSuite([basic_module_stuff, basic_stuff, parsing_mode, sql, formatting])
+    doctests = doctest.DocTestSuite(qtextasdata)
+    return unittest.TestSuite([basic_module_stuff, basic_stuff, parsing_mode, sql, formatting, doctests])
 
 if __name__ == '__main__':
     unittest.TextTestRunner(verbosity=2).run(suite())

@@ -72,6 +72,9 @@ Options:
     -c COLUMN_COUNT, --column-count=COLUMN_COUNT
                         Specific column count when using relaxed or strict
                         mode
+    -p INPUT_TYPES, --input-types=INPUT_TYPES
+                        Specify input column types (multiple values allowed
+                        separeted by comma)
     -k, --keep-leading-whitespace
                         Keep leading whitespace in values. Default behavior
                         strips leading whitespace off values, in order to
